@@ -55,6 +55,11 @@ const TRANSLATIONS = {
       deleteRecurringEventTitle: 'Delete Recurring Event',
       deleteEventConfirm: 'Are you sure you want to delete "{title}"? This action cannot be undone.',
       deleteRecurringPrompt: '"{title}" is a recurring event. How would you like to delete it?',
+      editRecurringEventTitle: 'Edit Recurring Event',
+      editRecurringPrompt: '"{title}" is a recurring event. How would you like to edit it?',
+      editThisOccurrence: 'Edit just this occurrence',
+      editThisOccurrenceAndFuture: 'Edit this occurrence and all future occurrences',
+      editEntireSeries: 'Edit the entire recurring series',
       deleteThisEventOnly: 'This event only',
       deleteThisOccurrence: 'Delete just this occurrence',
       deleteThisAndFutureEvents: 'This and future events',
@@ -145,6 +150,11 @@ const TRANSLATIONS = {
       deleteRecurringEventTitle: "Supprimer l'événement récurrent",
       deleteEventConfirm: 'Voulez-vous vraiment supprimer "{title}" ? Cette action est irréversible.',
       deleteRecurringPrompt: '"{title}" est un événement récurrent. Comment souhaitez-vous le supprimer ?',
+      editRecurringEventTitle: 'Modifier un événement récurrent',
+      editRecurringPrompt: '"{title}" est un événement récurrent. Comment souhaitez-vous le modifier ?',
+      editThisOccurrence: 'Modifier uniquement cette occurrence',
+      editThisOccurrenceAndFuture: 'Modifier cette occurrence et toutes les occurrences futures',
+      editEntireSeries: 'Modifier toute la série récurrente',
       deleteThisEventOnly: 'Cet événement uniquement',
       deleteThisOccurrence: 'Supprimer uniquement cette occurrence',
       deleteThisAndFutureEvents: 'Cet événement et les suivants',
@@ -235,6 +245,11 @@ const TRANSLATIONS = {
       deleteRecurringEventTitle: 'Wiederkehrenden Termin löschen',
       deleteEventConfirm: 'Möchten Sie "{title}" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.',
       deleteRecurringPrompt: '"{title}" ist ein wiederkehrender Termin. Wie möchten Sie ihn löschen?',
+      editRecurringEventTitle: 'Wiederkehrenden Termin bearbeiten',
+      editRecurringPrompt: '"{title}" ist ein wiederkehrender Termin. Wie möchten Sie ihn bearbeiten?',
+      editThisOccurrence: 'Nur dieses Vorkommen bearbeiten',
+      editThisOccurrenceAndFuture: 'Dieses und alle zukünftigen Vorkommen bearbeiten',
+      editEntireSeries: 'Die gesamte Serie bearbeiten',
       deleteThisEventOnly: 'Nur dieses Ereignis',
       deleteThisOccurrence: 'Nur dieses Vorkommen löschen',
       deleteThisAndFutureEvents: 'Dieses und zukünftige Ereignisse',
@@ -2722,6 +2737,50 @@ class SkylightCalendarCard extends HTMLElement {
     return parts.join(';');
   }
 
+  parseRRule(rrule = '') {
+    const parsed = {
+      frequency: 'DAILY',
+      interval: '1',
+      count: '',
+      untilDate: '',
+      byDay: []
+    };
+
+    if (!rrule || typeof rrule !== 'string') {
+      return parsed;
+    }
+
+    const ruleWithoutPrefix = rrule.replace(/^RRULE:/i, '');
+    const segments = ruleWithoutPrefix.split(';');
+
+    segments.forEach((segment) => {
+      const [rawKey, rawValue] = segment.split('=');
+      const key = (rawKey || '').toUpperCase();
+      const value = (rawValue || '').trim();
+
+      if (!key || !value) {
+        return;
+      }
+
+      if (key === 'FREQ') {
+        parsed.frequency = value.toUpperCase();
+      } else if (key === 'INTERVAL') {
+        parsed.interval = value;
+      } else if (key === 'COUNT') {
+        parsed.count = value;
+      } else if (key === 'BYDAY') {
+        parsed.byDay = value.split(',').map((day) => day.trim()).filter(Boolean);
+      } else if (key === 'UNTIL') {
+        const untilCompact = value.replace(/Z$/, '');
+        if (/^\d{8}/.test(untilCompact)) {
+          parsed.untilDate = `${untilCompact.slice(0, 4)}-${untilCompact.slice(4, 6)}-${untilCompact.slice(6, 8)}`;
+        }
+      }
+    });
+
+    return parsed;
+  }
+
   showCreateEventModal(defaultDate = null, defaultTime = null) {
 
     const modal = this.shadowRoot.getElementById('event-modal');
@@ -3065,7 +3124,7 @@ class SkylightCalendarCard extends HTMLElement {
     }, 100);
   }
 
-  showEditEventModal(event, startDate, endDate, isAllDay) {
+  showEditEventModal(event, startDate, endDate, isAllDay, editScope = 'this') {
     const modal = this.shadowRoot.getElementById('event-modal');
     const content = this.shadowRoot.getElementById('modal-content');
     
@@ -3091,6 +3150,9 @@ class SkylightCalendarCard extends HTMLElement {
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
+
+    const recurrenceData = this.parseRRule(event.rrule || '');
+    const isRecurring = !!event.rrule;
     
     content.innerHTML = `
       <div class="modal-header">
@@ -3125,6 +3187,50 @@ class SkylightCalendarCard extends HTMLElement {
             <div class="form-checkbox-group">
               <input type="checkbox" class="form-checkbox" id="event-all-day" ${isAllDay ? 'checked' : ''} />
               <label class="form-checkbox-label" for="event-all-day">${this.t('allDayEvent')}</label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <div class="form-checkbox-group">
+              <input type="checkbox" class="form-checkbox" id="event-recurring" ${isRecurring ? 'checked' : ''} />
+              <label class="form-checkbox-label" for="event-recurring">${this.t('recurring')}</label>
+            </div>
+          </div>
+
+          <div id="recurring-event-fields" style="display: ${isRecurring ? 'block' : 'none'};">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">${this.t('recurrenceFrequency')}</label>
+                <select class="form-select" id="event-recurrence-frequency">
+                  <option value="DAILY" ${recurrenceData.frequency === 'DAILY' ? 'selected' : ''}>${this.t('recurrenceDaily')}</option>
+                  <option value="WEEKLY" ${recurrenceData.frequency === 'WEEKLY' ? 'selected' : ''}>${this.t('recurrenceWeekly')}</option>
+                  <option value="MONTHLY" ${recurrenceData.frequency === 'MONTHLY' ? 'selected' : ''}>${this.t('recurrenceMonthly')}</option>
+                  <option value="YEARLY" ${recurrenceData.frequency === 'YEARLY' ? 'selected' : ''}>${this.t('recurrenceYearly')}</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">${this.t('recurrenceEvery')}</label>
+                <input type="number" class="form-input" id="event-recurrence-interval" min="1" value="${this.escapeHtml(recurrenceData.interval || '1')}" />
+              </div>
+            </div>
+            <div class="form-group" id="event-recurrence-weekdays-group" style="display: ${isRecurring && recurrenceData.frequency === 'WEEKLY' ? 'block' : 'none'};">
+              <label class="form-label">${this.t('recurrenceWeekdays')}</label>
+              <div class="form-checkbox-group" style="flex-wrap: wrap; gap: 10px;">
+                ${this.getRecurrenceWeekdayOptions().map(day => `
+                  <label class="form-checkbox-label" style="display:flex;align-items:center;gap:6px;">
+                    <input type="checkbox" class="form-checkbox event-recurrence-weekday" value="${day.key}" ${recurrenceData.byDay.includes(day.key) ? 'checked' : ''} />
+                    <span>${day.label}</span>
+                  </label>
+                `).join('')}
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">${this.t('recurrenceEndsOn')}</label>
+              <input type="date" class="form-input" id="event-recurrence-until" value="${this.escapeHtml(recurrenceData.untilDate || '')}" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">${this.t('recurrenceCount')}</label>
+              <input type="number" class="form-input" id="event-recurrence-count" min="1" placeholder="10" value="${this.escapeHtml(recurrenceData.count || '')}" />
             </div>
           </div>
           
@@ -3187,8 +3293,12 @@ class SkylightCalendarCard extends HTMLElement {
     // Event listeners
     const form = this.shadowRoot.getElementById('edit-event-form');
     const allDayCheckbox = this.shadowRoot.getElementById('event-all-day');
+    const recurringCheckbox = this.shadowRoot.getElementById('event-recurring');
+    const recurrenceFrequency = this.shadowRoot.getElementById('event-recurrence-frequency');
     const timedFields = this.shadowRoot.getElementById('timed-event-fields');
     const allDayFields = this.shadowRoot.getElementById('all-day-event-fields');
+    const recurringFields = this.shadowRoot.getElementById('recurring-event-fields');
+    const recurrenceWeekdaysGroup = this.shadowRoot.getElementById('event-recurrence-weekdays-group');
     const errorDiv = this.shadowRoot.getElementById('form-error');
     
     // Toggle all-day fields
@@ -3201,6 +3311,17 @@ class SkylightCalendarCard extends HTMLElement {
         allDayFields.style.display = 'none';
       }
     });
+
+    const updateRecurringFrequencyVisibility = () => {
+      recurrenceWeekdaysGroup.style.display = recurrenceFrequency.value === 'WEEKLY' ? 'block' : 'none';
+    };
+
+    recurringCheckbox.addEventListener('change', () => {
+      recurringFields.style.display = recurringCheckbox.checked ? 'block' : 'none';
+    });
+
+    recurrenceFrequency.addEventListener('change', updateRecurringFrequencyVisibility);
+    updateRecurringFrequencyVisibility();
     
     // Close button
     this.shadowRoot.getElementById('close-modal').addEventListener('click', () => {
@@ -3280,13 +3401,34 @@ class SkylightCalendarCard extends HTMLElement {
         eventData.end = { dateTime: end.toISOString() };
       }
       
+      if (recurringCheckbox.checked) {
+        const frequency = this.shadowRoot.getElementById('event-recurrence-frequency').value;
+        const interval = this.shadowRoot.getElementById('event-recurrence-interval').value;
+        const untilDate = this.shadowRoot.getElementById('event-recurrence-until').value;
+        const recurrenceCount = this.shadowRoot.getElementById('event-recurrence-count').value;
+        const byDay = Array.from(this.shadowRoot.querySelectorAll('.event-recurrence-weekday:checked')).map((el) => el.value);
+
+        if (frequency === 'WEEKLY' && byDay.length === 0) {
+          this.showFormError(errorDiv, this.t('recurrenceSelectWeekday'));
+          return;
+        }
+
+        eventData.rrule = this.buildRRuleFromInputs({
+          frequency,
+          interval,
+          untilDate,
+          count: recurrenceCount,
+          byDay: frequency === 'WEEKLY' ? byDay : []
+        });
+      }
+      
       // Disable submit button
       const submitBtn = this.shadowRoot.getElementById('submit-btn');
       submitBtn.disabled = true;
       submitBtn.textContent = this.t('saving');
       
       try {
-        await this.updateEvent(event, calendarId, eventData);
+        await this.updateEvent(event, calendarId, eventData, editScope);
         modal.classList.remove('show');
         
         // Refresh events
@@ -3322,7 +3464,7 @@ class SkylightCalendarCard extends HTMLElement {
     }, 100);
   }
 
-  async updateEvent(originalEvent, newCalendarId, eventData) {
+  async updateEvent(originalEvent, newCalendarId, eventData, editScope = 'this') {
     if (!this._hass) {
       throw new Error(this.t('homeAssistantUnavailable'));
     }
@@ -3334,6 +3476,56 @@ class SkylightCalendarCard extends HTMLElement {
     
     if (!originalEvent.uid) {
       throw new Error(this.t('missingUidError'));
+    }
+
+    const isRecurringUpdate = !!eventData.rrule || !!originalEvent.rrule;
+
+    const recurrenceId = (isRecurringUpdate && editScope !== 'all') ? originalEvent.recurrence_id : null;
+    const recurrenceRange = (isRecurringUpdate && editScope === 'future' && originalEvent.recurrence_id) ? 'THISANDFUTURE' : null;
+
+    if (isRecurringUpdate && !movingCalendar && this._hass.connection?.sendMessagePromise) {
+      const dtstart = eventData.start.dateTime || eventData.start.date;
+      const dtend = eventData.end.dateTime || eventData.end.date;
+
+      const eventPayload = {
+        summary: eventData.summary,
+        dtstart,
+        dtend
+      };
+
+      if (eventData.location) {
+        eventPayload.location = eventData.location;
+      }
+
+      if (eventData.description) {
+        eventPayload.description = eventData.description;
+      }
+
+      if (eventData.rrule) {
+        eventPayload.rrule = eventData.rrule;
+      }
+
+      const wsPayload = {
+        type: 'calendar/event/update',
+        entity_id: originalEvent.entityId,
+        uid: originalEvent.uid,
+        event: eventPayload
+      };
+
+      if (recurrenceId) {
+        wsPayload.recurrence_id = recurrenceId;
+      }
+
+      if (recurrenceRange) {
+        wsPayload.recurrence_range = recurrenceRange;
+      }
+
+      try {
+        await this._hass.connection.sendMessagePromise(wsPayload);
+        return;
+      } catch (error) {
+        console.error('Recurring update via WebSocket failed, falling back:', error?.message || error);
+      }
     }
     
     // If calendar supports UPDATE, we're not moving calendars, and service exists, use update service
@@ -3365,9 +3557,17 @@ class SkylightCalendarCard extends HTMLElement {
           serviceData.end_date_time = eventData.end.dateTime;
         }
         
-        // Add recurrence_id if this is a recurring event instance
-        if (originalEvent.recurrence_id) {
-          serviceData.recurrence_id = originalEvent.recurrence_id;
+        if (eventData.rrule) {
+          serviceData.rrule = eventData.rrule;
+        }
+
+        // Add recurrence controls for recurring event edits
+        if (recurrenceId) {
+          serviceData.recurrence_id = recurrenceId;
+        }
+
+        if (recurrenceRange) {
+          serviceData.recurrence_range = recurrenceRange;
         }
         
         await this._hass.callService('calendar', 'update_event', serviceData);
@@ -3390,7 +3590,7 @@ class SkylightCalendarCard extends HTMLElement {
       await this.createEvent(newCalendarId, eventData);
 
       // Delete from original calendar only after successful create
-      await this.deleteEvent(originalEvent.entityId, originalEvent.uid, originalEvent.recurrence_id);
+      await this.deleteEvent(originalEvent.entityId, originalEvent.uid, recurrenceId, recurrenceRange);
     } catch (error) {
       console.error('Create+Delete fallback failed:', error);
       throw new Error(error.message || this.t('updateEventServiceError'));
@@ -3539,6 +3739,74 @@ class SkylightCalendarCard extends HTMLElement {
       errorDiv.style.display = 'none';
     }, 5000);
   }
+
+
+  showEditConfirmation(event, startDate, endDate, isAllDay) {
+    const modal = this.shadowRoot.getElementById('event-modal');
+    const content = this.shadowRoot.getElementById('modal-content');
+
+    const isRecurring = event.rrule || event.recurrence_id;
+    if (!isRecurring) {
+      this.showEditEventModal(event, startDate, endDate, isAllDay, 'this');
+      return;
+    }
+
+    content.innerHTML = `
+      <div class="confirm-dialog">
+        <h3 class="confirm-title">${this.t('editRecurringEventTitle')}</h3>
+        <p class="confirm-message">
+          ${this.t('editRecurringPrompt', { title: this.escapeHtml(event.summary || this.t('untitledEvent')) })}
+        </p>
+
+        <div class="recurring-options">
+          <label class="recurring-option">
+            <input type="radio" name="edit-option" value="this" checked />
+            <div class="recurring-option-label">
+              <div class="recurring-option-title">${this.t('deleteThisEventOnly')}</div>
+              <div class="recurring-option-description">${this.t('editThisOccurrence')}</div>
+            </div>
+          </label>
+
+          ${event.recurrence_id ? `
+            <label class="recurring-option">
+              <input type="radio" name="edit-option" value="future" />
+              <div class="recurring-option-label">
+                <div class="recurring-option-title">${this.t('deleteThisAndFutureEvents')}</div>
+                <div class="recurring-option-description">${this.t('editThisOccurrenceAndFuture')}</div>
+              </div>
+            </label>
+          ` : ''}
+
+          <label class="recurring-option">
+            <input type="radio" name="edit-option" value="all" />
+            <div class="recurring-option-label">
+              <div class="recurring-option-title">${this.t('deleteAllEvents')}</div>
+              <div class="recurring-option-description">${this.t('editEntireSeries')}</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="confirm-actions">
+          <button class="btn btn-secondary" id="cancel-edit-option-btn">${this.t('cancel')}</button>
+          <button class="btn btn-primary" id="confirm-edit-option-btn">${this.t('editEvent')}</button>
+        </div>
+      </div>
+    `;
+
+    modal.classList.add('show');
+
+    this.shadowRoot.getElementById('cancel-edit-option-btn')?.addEventListener('click', () => {
+      modal.classList.remove('show');
+      this.showEventModal(event);
+    });
+
+    this.shadowRoot.getElementById('confirm-edit-option-btn')?.addEventListener('click', () => {
+      const selectedOption = this.shadowRoot.querySelector('input[name="edit-option"]:checked')?.value || 'this';
+      modal.classList.remove('show');
+      this.showEditEventModal(event, startDate, endDate, isAllDay, selectedOption);
+    });
+  }
+
 
   showDeleteConfirmation(event) {
     const modal = this.shadowRoot.getElementById('event-modal');
@@ -3802,7 +4070,7 @@ class SkylightCalendarCard extends HTMLElement {
     // Edit button
     this.shadowRoot.getElementById('edit-event-btn')?.addEventListener('click', () => {
       modal.classList.remove('show');
-      this.showEditEventModal(event, startDate, endDate, isAllDay);
+      this.showEditConfirmation(event, startDate, endDate, isAllDay);
     });
     
     // Delete button
