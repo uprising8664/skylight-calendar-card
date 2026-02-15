@@ -356,8 +356,9 @@ class SkylightCalendarCard extends HTMLElement {
     this._isDarkMode = false;
     this._weekStandardFixedOffsetHeight = null;
     this._weekStandardContainerTopInViewport = null;
+    this._monthContainerTopInViewport = null;
     this._handleViewportResize = () => {
-      if (this._config.compact_height && this._viewMode === 'week-standard') {
+      if (this._config.compact_height && (this._viewMode === 'week-standard' || this._viewMode === 'month')) {
         this.render();
       }
     };
@@ -743,12 +744,12 @@ class SkylightCalendarCard extends HTMLElement {
     window.visualViewport?.removeEventListener('resize', this._handleViewportResize);
   }
 
-  getCompactMaxHeight() {
+  getCompactMaxHeight(containerTopInViewport = null) {
     if (!this._config.compact_height) return null;
 
     const viewportHeight = window.visualViewport?.height || window.innerHeight;
     const containerTop = Math.max(
-      this._weekStandardContainerTopInViewport ?? this.getBoundingClientRect().top,
+      containerTopInViewport ?? this.getBoundingClientRect().top,
       0
     );
     const bottomSpacing = 24;
@@ -796,6 +797,24 @@ class SkylightCalendarCard extends HTMLElement {
       this.render();
     }
   }
+
+
+  updateMonthContainerTopInViewportFromDom() {
+    if (this._viewMode !== 'month' || !this._config.compact_height || !this.shadowRoot) return;
+
+    const container = this.shadowRoot.querySelector('.calendar-grid');
+    if (!container) return;
+
+    const measuredContainerTop = Math.max(container.getBoundingClientRect().top, 0);
+    if (!Number.isFinite(measuredContainerTop)) return;
+
+    const containerTopChanged = this._monthContainerTopInViewport === null || Math.abs(this._monthContainerTopInViewport - measuredContainerTop) > 1;
+    if (containerTopChanged) {
+      this._monthContainerTopInViewport = measuredContainerTop;
+      this.render();
+    }
+  }
+
 
   getLanguage() {
     return resolveLanguage(this._config.language || this._hass?.language || this._hass?.locale?.language);
@@ -1086,6 +1105,15 @@ class SkylightCalendarCard extends HTMLElement {
         gap: 1px;
         background: #e5e7eb;
         border-top: 1px solid #e5e7eb;
+      }
+
+
+      .calendar-grid.compact-month {
+        align-items: stretch;
+      }
+
+      .calendar-grid.compact-month .day-cell {
+        min-height: 0;
       }
       
       .day-header {
@@ -2214,6 +2242,7 @@ class SkylightCalendarCard extends HTMLElement {
 
     this.attachEventListeners();
     this.updateWeekStandardFixedOffsetHeightFromDom();
+    this.updateMonthContainerTopInViewportFromDom();
   }
 
   renderStandardHeader() {
@@ -2348,9 +2377,17 @@ class SkylightCalendarCard extends HTMLElement {
 
   renderCalendarView() {
     if (this._viewMode === 'month') {
+      const isCompactMonth = this._config.compact_height;
+      const compactMaxHeight = isCompactMonth ? this.getCompactMaxHeight(this._monthContainerTopInViewport) : null;
+      const monthWeekRows = this.getMonthWeekRowCount();
+      const monthStyle = compactMaxHeight
+        ? `height: ${compactMaxHeight}px; overflow-y: auto; grid-template-rows: auto repeat(${monthWeekRows}, minmax(0, 1fr));`
+        : '';
+      const monthClass = isCompactMonth ? 'calendar-grid compact-month' : 'calendar-grid';
+
       return `
         ${!this._config.compact_header ? this.renderCalendarBadges() : ''}
-        <div class="calendar-grid">
+        <div class="${monthClass}" style="${monthStyle}">
           ${this.renderDayHeaders()}
           ${this.renderDays()}
         </div>
@@ -2450,7 +2487,7 @@ class SkylightCalendarCard extends HTMLElement {
       ? 16 + (maxAllDayEvents * 24) + ((maxAllDayEvents - 1) * 4) + 2
       : 0;
 
-    const compactMaxHeight = this.getCompactMaxHeight();
+    const compactMaxHeight = this.getCompactMaxHeight(this._weekStandardContainerTopInViewport);
     const fallbackOffsetHeight = 127 + allDayHeight;
     const staticOffsetHeight = this._weekStandardFixedOffsetHeight || fallbackOffsetHeight;
     const availableSlotHeight = compactMaxHeight ? compactMaxHeight - staticOffsetHeight : null;
@@ -2737,6 +2774,19 @@ class SkylightCalendarCard extends HTMLElement {
     return `${hour - 12} PM`;
   }
 
+  getMonthWeekRowCount() {
+    if (this._config.rolling_weeks !== null && this._viewMode === 'month') {
+      return this._config.rolling_weeks + 1;
+    }
+
+    const year = this._currentDate.getFullYear();
+    const month = this._currentDate.getMonth();
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const startDay = (firstDay - this._config.firstDayOfWeek + 7) % 7;
+    return Math.ceil((startDay + daysInMonth) / 7);
+  }
+
   renderDays() {
     const year = this._currentDate.getFullYear();
     const month = this._currentDate.getMonth();
@@ -2814,6 +2864,39 @@ class SkylightCalendarCard extends HTMLElement {
     return html;
   }
 
+  getMaxVisibleEventsForMonthDay() {
+    const defaultMaxVisible = 3;
+
+    if (this._viewMode !== 'month' || !this._config.compact_height) {
+      return defaultMaxVisible;
+    }
+
+    const compactMaxHeight = this.getCompactMaxHeight(this._monthContainerTopInViewport);
+    if (!compactMaxHeight) {
+      return defaultMaxVisible;
+    }
+
+    const weekRows = this.getMonthWeekRowCount();
+    if (!weekRows || weekRows < 1) {
+      return defaultMaxVisible;
+    }
+
+    const gridGap = 1;
+    const dayHeaderRowHeight = 41;
+    const verticalPadding = 16;
+    const dayNumberHeight = 32;
+    const eventRowHeight = 22;
+
+    const contentHeight = compactMaxHeight - dayHeaderRowHeight - (weekRows * gridGap);
+    const dayCellHeight = Math.floor(contentHeight / weekRows);
+    const usableEventHeight = dayCellHeight - verticalPadding - dayNumberHeight;
+    if (!Number.isFinite(usableEventHeight) || usableEventHeight <= 0) {
+      return 1;
+    }
+
+    return Math.max(1, Math.floor(usableEventHeight / eventRowHeight));
+  }
+
   renderDay(dayNum, date, isOtherMonth) {
     const today = new Date();
     const isToday = date.toDateString() === today.toDateString();
@@ -2821,7 +2904,7 @@ class SkylightCalendarCard extends HTMLElement {
     
     dayEvents = this.sortEventsForDate(dayEvents, date);
     
-    const maxVisible = 3;
+    const maxVisible = this.getMaxVisibleEventsForMonthDay();
     
     let classes = 'day-cell';
     if (isOtherMonth) classes += ' other-month';

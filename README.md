@@ -165,7 +165,7 @@ rolling_weeks: 3  # Show current + 3 more weeks (28 days)
 | `week_start_hour` | integer | `8` | Start hour for week-standard view (0-23) |
 | `week_end_hour` | integer | `21` | End hour for week-standard view (0-23) |
 | `height_scale` | float | `1.0` | Height scaling factor (0.5-2.0, affects schedule view) |
-| `compact_height` | boolean | `false` | Fit calendar to screen height with scroll |
+| `compact_height` | boolean | `false` | Fit monthly calendar and schedule views to available screen height without scrolling |
 | `compact_header` | boolean | `false` | Single-row header with inline badges |
 | `hide_event_calendar_bubble` | boolean | `false` | Hide the calendar initial bubble shown inside events |
 | `hide_times_for_calendars` | list | `[]` | Calendar entities whose start/end times should be hidden in schedule view |
