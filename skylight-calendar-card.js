@@ -522,70 +522,69 @@ class SkylightCalendarCard extends HTMLElement {
   }
 
   async fetchEventsInRange(startDate, endDate) {
-    const fetchedEvents = [];
     const chunks = this.getDateRangeChunks(startDate, endDate, 30);
+    const eventsByCalendar = await Promise.all(
+      this._config.entities.map((entityId, index) =>
+        this.fetchEventsForCalendar(entityId, index, chunks)
+      )
+    );
 
-    // Fetch events for each calendar
-    for (let i = 0; i < this._config.entities.length; i++) {
-      const entityId = this._config.entities[i];
-      const seen = new Set();
+    return eventsByCalendar.flat();
+  }
 
-      for (const chunk of chunks) {
-        const chunkStartStr = chunk.startDate.toISOString();
-        const chunkEndStr = chunk.endDate.toISOString();
+  async fetchEventsForCalendar(entityId, colorIndex, chunks) {
+    const seen = new Set();
+    const color = this._config.colors[entityId] || this.getDefaultColor(colorIndex);
 
-        try {
-          // Use WebSocket API to get calendar events
-          const events = await this._hass.callWS({
-            type: 'calendar/event/list',
-            entity_id: entityId,
-            start_date_time: chunkStartStr,
-            end_date_time: chunkEndStr
-          });
+    const chunkEventLists = await Promise.all(
+      chunks.map(chunk => this.fetchEventsForChunk(entityId, chunk))
+    );
 
-          if (events && Array.isArray(events)) {
-            events.forEach(event => {
-              const key = this.getEventIdentityKey(entityId, event);
-              if (seen.has(key)) return;
-              seen.add(key);
+    const mergedEvents = [];
+    chunkEventLists.forEach(events => {
+      if (!events || !Array.isArray(events)) return;
 
-              fetchedEvents.push({
-                ...event,
-                entityId,
-                color: this._config.colors[entityId] || this.getDefaultColor(i)
-              });
-            });
-          }
-        } catch (error) {
-          // WebSocket API might not be available in older HA versions or for some integrations
-          // Try REST API fallback without logging (this is expected)
-          try {
-            const startDateOnly = chunk.startDate.toISOString().split('T')[0];
-            const endDateOnly = chunk.endDate.toISOString().split('T')[0];
-            const events = await this._hass.callApi('GET', `calendars/${entityId}?start=${startDateOnly}T00:00:00Z&end=${endDateOnly}T23:59:59Z`);
+      events.forEach(event => {
+        const key = this.getEventIdentityKey(entityId, event);
+        if (seen.has(key)) return;
+        seen.add(key);
 
-            if (events && Array.isArray(events)) {
-              events.forEach(event => {
-                const key = this.getEventIdentityKey(entityId, event);
-                if (seen.has(key)) return;
-                seen.add(key);
+        mergedEvents.push({
+          ...event,
+          entityId,
+          color
+        });
+      });
+    });
 
-                fetchedEvents.push({
-                  ...event,
-                  entityId,
-                  color: this._config.colors[entityId] || this.getDefaultColor(i)
-                });
-              });
-            }
-          } catch (error2) {
-            // Both methods failed - this is a real error
-            console.error(`Failed to fetch events for ${entityId}:`, error2.message || error2);
-          }
-        }
+    return mergedEvents;
+  }
+
+  async fetchEventsForChunk(entityId, chunk) {
+    const chunkStartStr = chunk.startDate.toISOString();
+    const chunkEndStr = chunk.endDate.toISOString();
+
+    try {
+      // Use WebSocket API to get calendar events
+      return await this._hass.callWS({
+        type: 'calendar/event/list',
+        entity_id: entityId,
+        start_date_time: chunkStartStr,
+        end_date_time: chunkEndStr
+      });
+    } catch (error) {
+      // WebSocket API might not be available in older HA versions or for some integrations
+      // Try REST API fallback without logging (this is expected)
+      try {
+        const startDateOnly = chunk.startDate.toISOString().split('T')[0];
+        const endDateOnly = chunk.endDate.toISOString().split('T')[0];
+        return await this._hass.callApi('GET', `calendars/${entityId}?start=${startDateOnly}T00:00:00Z&end=${endDateOnly}T23:59:59Z`);
+      } catch (error2) {
+        // Both methods failed - this is a real error
+        console.error(`Failed to fetch events for ${entityId}:`, error2.message || error2);
+        return [];
       }
     }
-
-    return fetchedEvents;
   }
 
   mergeEvents(existingEvents, incomingEvents) {
