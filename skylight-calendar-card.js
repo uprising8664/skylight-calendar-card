@@ -17,6 +17,7 @@ const TRANSLATIONS = {
       month: 'Month',
       week: 'Week',
       schedule: 'Schedule',
+      calendars: 'Calendars',
       calendar: 'Calendar',
       eventTitle: 'Event Title',
       eventTitlePlaceholder: 'Team Meeting',
@@ -116,6 +117,7 @@ const TRANSLATIONS = {
       month: 'Mois',
       week: 'Semaine',
       schedule: 'Planning',
+      calendars: 'Calendriers',
       calendar: 'Calendrier',
       eventTitle: "Titre de l'événement",
       eventTitlePlaceholder: "Réunion d'équipe",
@@ -215,6 +217,7 @@ const TRANSLATIONS = {
       month: 'Monat',
       week: 'Woche',
       schedule: 'Zeitplan',
+      calendars: 'Kalender',
       calendar: 'Kalender',
       eventTitle: 'Terminname',
       eventTitlePlaceholder: 'Team-Meeting',
@@ -314,6 +317,7 @@ const TRANSLATIONS = {
       month: 'Maand',
       week: 'Week',
       schedule: 'Schema',
+      calendars: "Agenda's",
       calendar: 'agenda',
       eventTitle: 'Afspraak onderwerp',
       eventTitlePlaceholder: 'Groepsafspraak',
@@ -3810,15 +3814,21 @@ class SkylightCalendarCard extends HTMLElement {
         <form id="create-event-form">
           <div class="form-group">
             <label class="form-label">
-              ${this.t('calendar')}<span class="form-required">*</span>
+              ${this.t('calendars')}<span class="form-required">*</span>
             </label>
-            <select class="form-select" id="event-calendar" required>
+            <div class="form-checkbox-group" style="flex-direction: column; align-items: flex-start; gap: 10px;">
               ${writableCalendars.map((entityId, index) => `
-                <option value="${entityId}" ${index === 0 ? 'selected' : ''}>
-                  ${this.escapeHtml(this.getCalendarName(entityId))}
-                </option>
+                <label class="form-checkbox-group" style="margin: 0;">
+                  <input
+                    type="checkbox"
+                    class="form-checkbox create-event-calendar"
+                    value="${entityId}"
+                    ${index === 0 ? 'checked' : ''}
+                  />
+                  <span class="form-checkbox-label">${this.escapeHtml(this.getCalendarName(entityId))}</span>
+                </label>
               `).join('')}
-            </select>
+            </div>
           </div>
           
           <div class="form-group">
@@ -4005,11 +4015,17 @@ class SkylightCalendarCard extends HTMLElement {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       
-      const calendarId = this.shadowRoot.getElementById('event-calendar').value;
+      const selectedCalendarIds = Array.from(this.shadowRoot.querySelectorAll('.create-event-calendar:checked'))
+        .map((input) => input.value);
       const title = this.shadowRoot.getElementById('event-title').value.trim();
       const isAllDay = this.shadowRoot.getElementById('event-all-day').checked;
       const location = this.shadowRoot.getElementById('event-location').value.trim();
       const description = this.shadowRoot.getElementById('event-description').value.trim();
+
+      if (selectedCalendarIds.length === 0) {
+        this.showFormError(errorDiv, this.t('noWritableCalendars'));
+        return;
+      }
       
       if (!title) {
         this.showFormError(errorDiv, this.t('eventTitleRequired'));
@@ -4099,7 +4115,7 @@ class SkylightCalendarCard extends HTMLElement {
       submitBtn.textContent = this.t('creating');
       
       try {
-        await this.createEvent(calendarId, eventData);
+        await Promise.all(selectedCalendarIds.map((calendarId) => this.createEvent(calendarId, eventData)));
         modal.classList.remove('show');
         
         // Refresh events
