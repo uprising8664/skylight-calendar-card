@@ -3604,9 +3604,9 @@ class SkylightCalendarCard extends HTMLElement {
       grouped.sourceEvents.push(event);
     });
 
-    return Array.from(groupedEvents.values()).map(({ baseEvent, calendars, sourceEvents }) => {
+    return Array.from(groupedEvents.values()).flatMap(({ baseEvent, calendars, sourceEvents }) => {
       if (calendars.length === 1) {
-        return baseEvent;
+        return sourceEvents;
       }
 
       return {
@@ -5335,17 +5335,24 @@ class SkylightCalendarCard extends HTMLElement {
   showDeleteConfirmation(event, selectedEvents = null) {
     const modal = this.shadowRoot.getElementById('event-modal');
     const content = this.shadowRoot.getElementById('modal-content');
+    const deleteTargets = Array.isArray(selectedEvents) && selectedEvents.length > 0
+      ? selectedEvents
+      : (Array.isArray(this._combinedDeleteTargets) && this._combinedDeleteTargets.length > 0
+          ? this._combinedDeleteTargets
+          : [event]);
+    const representativeEvent = deleteTargets[0] || event;
     
-    // Check if this is a recurring event
-    const isRecurring = event.rrule || event.recurrence_id;
+    // Check if any selected target is recurring
+    const hasRecurringTargets = deleteTargets.some(target => target.rrule || target.recurrence_id);
+    const hasFutureCapableTargets = deleteTargets.some(target => target.recurrence_id);
     
-    if (isRecurring) {
+    if (hasRecurringTargets) {
       // Show recurring event deletion options
       content.innerHTML = `
         <div class="confirm-dialog">
           <h3 class="confirm-title">${this.t('deleteRecurringEventTitle')}</h3>
           <p class="confirm-message">
-            ${this.t('deleteRecurringPrompt', { title: this.escapeHtml(event.summary || this.t('untitledEvent')) })}
+            ${this.t('deleteRecurringPrompt', { title: this.escapeHtml(representativeEvent.summary || this.t('untitledEvent')) })}
           </p>
           
           <div class="recurring-options">
@@ -5357,7 +5364,7 @@ class SkylightCalendarCard extends HTMLElement {
               </div>
             </label>
             
-            ${event.recurrence_id ? `
+            ${hasFutureCapableTargets ? `
               <label class="recurring-option">
                 <input type="radio" name="delete-option" value="future" />
                 <div class="recurring-option-label">
@@ -5388,7 +5395,7 @@ class SkylightCalendarCard extends HTMLElement {
         <div class="confirm-dialog">
           <h3 class="confirm-title">${this.t('deleteEventTitle')}</h3>
           <p class="confirm-message">
-            ${this.t('deleteEventConfirm', { title: this.escapeHtml(event.summary || this.t('untitledEvent')) })}
+            ${this.t('deleteEventConfirm', { title: this.escapeHtml(representativeEvent.summary || this.t('untitledEvent')) })}
           </p>
           <div class="confirm-actions">
             <button class="btn btn-secondary" id="cancel-delete-btn">${this.t('cancel')}</button>
@@ -5413,25 +5420,29 @@ class SkylightCalendarCard extends HTMLElement {
       deleteBtn.textContent = this.t('deleting');
       
       try {
-        const deleteTargets = Array.isArray(selectedEvents) && selectedEvents.length > 0
-          ? selectedEvents
-          : (Array.isArray(this._combinedDeleteTargets) && this._combinedDeleteTargets.length > 0
-              ? this._combinedDeleteTargets
-              : [event]);
-
-        if (isRecurring) {
+        if (hasRecurringTargets) {
           // Get the selected option
           const selectedOption = this.shadowRoot.querySelector('input[name="delete-option"]:checked')?.value;
 
           for (const targetEvent of deleteTargets) {
-            if (selectedOption === 'this') {
-              // Delete this instance only
-              await this.deleteEvent(targetEvent.entityId, targetEvent.uid, targetEvent.recurrence_id);
-            } else if (selectedOption === 'future') {
-              // Delete this and future instances
+            const targetIsRecurring = targetEvent.rrule || targetEvent.recurrence_id;
+
+            if (!targetIsRecurring) {
+              await this.deleteEvent(targetEvent.entityId, targetEvent.uid);
+              continue;
+            }
+
+            if (selectedOption === 'future' && targetEvent.recurrence_id) {
+              // Delete this and future instances when this target has an occurrence id
               await this.deleteEvent(targetEvent.entityId, targetEvent.uid, targetEvent.recurrence_id, 'THISANDFUTURE');
-            } else {
+            } else if (selectedOption === 'this' && targetEvent.recurrence_id) {
+              // Delete this instance only when this target has an occurrence id
+              await this.deleteEvent(targetEvent.entityId, targetEvent.uid, targetEvent.recurrence_id);
+            } else if (selectedOption === 'all') {
               // Delete entire series
+              await this.deleteEvent(targetEvent.entityId, targetEvent.uid);
+            } else {
+              // Fallback for recurring targets without recurrence_id
               await this.deleteEvent(targetEvent.entityId, targetEvent.uid);
             }
           }
