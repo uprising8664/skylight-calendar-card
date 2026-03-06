@@ -452,6 +452,7 @@ class SkylightCalendarCard extends HTMLElement {
     this._fetching = false;
     this._lastFetch = null;
     this._loadedEventRange = null;
+    this._haEventSubscription = null; // Subscription for gcal_webhook_fired HA events
     this._hiddenCalendars = new Set(); // Track which calendars are hidden
     this._calendarCapabilities = {}; // Track calendar capabilities
     this._activeLanguage = DEFAULT_LANGUAGE;
@@ -658,6 +659,10 @@ class SkylightCalendarCard extends HTMLElement {
       locale: config.locale || null, // Locale override for date/time formatting (e.g., 'en-US')
       default_dark_mode: config.default_dark_mode ?? config.dark_mode ?? false, // Start in dark mode on initial load
       preference_storage_key: config.preference_storage_key || null, // Optional key to isolate saved preferences per card
+      refresh_interval: Number.isFinite(Number(config.refresh_interval)) && Number(config.refresh_interval) > 0
+        ? Number(config.refresh_interval) * 1000
+        : 60000, // Staleness threshold in ms (default 60s); set refresh_interval in seconds in card config
+      ha_refresh_event: config.ha_refresh_event || null, // HA event name to force-refresh the card (e.g. gcal_webhook_fired)
       ...config
     };
     this._viewMode = this._config.default_view;
@@ -675,6 +680,11 @@ class SkylightCalendarCard extends HTMLElement {
   set hass(hass) {
     const oldHass = this._hass;
     this._hass = hass;
+
+    // Subscribe to HA refresh event on first hass injection
+    if (!oldHass) {
+      this._subscribeHaRefreshEvent();
+    }
     
     // Check calendar capabilities when hass is set
     if (!oldHass || this._hass !== oldHass) {
@@ -863,7 +873,7 @@ class SkylightCalendarCard extends HTMLElement {
   }
 
   async ensureEventsForCurrentRange({ force = false, renderIfCovered = false } = {}) {
-    const shouldRefreshForAge = !this._lastFetch || (Date.now() - this._lastFetch > 60000);
+    const shouldRefreshForAge = !this._lastFetch || (Date.now() - this._lastFetch > (this._config.refresh_interval || 60000));
     const { startDate: visibleStartDate, endDate: visibleEndDate } = this.getVisibleDateRange();
 
     // Background stale refreshes run through this path via hass updates.
@@ -1049,12 +1059,35 @@ class SkylightCalendarCard extends HTMLElement {
   connectedCallback() {
     window.addEventListener('resize', this._handleViewportResize);
     window.visualViewport?.addEventListener('resize', this._handleViewportResize);
+    this._subscribeHaRefreshEvent();
     this.render();
   }
 
   disconnectedCallback() {
     window.removeEventListener('resize', this._handleViewportResize);
     window.visualViewport?.removeEventListener('resize', this._handleViewportResize);
+    this._unsubscribeHaRefreshEvent();
+  }
+
+  _subscribeHaRefreshEvent() {
+    const eventName = this._config?.ha_refresh_event;
+    if (!eventName || !this._hass?.connection) return;
+    if (this._haEventSubscription) return; // already subscribed
+    this._hass.connection.subscribeEvents((event) => {
+      this._lastFetch = null;
+      this.ensureEventsForCurrentRange({ force: true });
+    }, eventName).then((unsub) => {
+      this._haEventSubscription = unsub;
+    }).catch((err) => {
+      console.warn('[skylight-calendar-card] Failed to subscribe to HA event:', eventName, err);
+    });
+  }
+
+  _unsubscribeHaRefreshEvent() {
+    if (this._haEventSubscription) {
+      this._haEventSubscription();
+      this._haEventSubscription = null;
+    }
   }
 
   getCompactMaxHeight(containerTopInViewport = null) {
