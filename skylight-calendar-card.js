@@ -850,6 +850,44 @@ class SkylightCalendarCard extends HTMLElement {
     }
   }
 
+  // Surgical refresh: re-fetches only the specified entity IDs within the already-loaded
+  // range, then splices in the fresh events (adding new, updating changed, removing deleted)
+  // without touching other entities. Renders once at the end — no full card reload.
+  async refreshCalendarEntities(entityIds) {
+    if (!this._hass || this._fetching || !this._loadedEventRange) {
+      // No loaded range yet — fall back to a full fetch
+      return this.updateEvents();
+    }
+
+    const entitiesToRefresh = entityIds || this._config.entities;
+    const { startDate, endDate } = this._loadedEventRange;
+    const chunks = this.getDateRangeChunks(startDate, endDate, 30);
+
+    this._fetching = true;
+    this._lastFetch = Date.now();
+
+    try {
+      // Fetch fresh events for only the affected entities
+      const freshByEntity = await Promise.all(
+        entitiesToRefresh.map((entityId, i) => {
+          const colorIndex = this._config.entities.indexOf(entityId);
+          return this.fetchEventsForCalendar(entityId, colorIndex, chunks);
+        })
+      );
+      const freshEvents = freshByEntity.flat();
+
+      // Remove stale events for the refreshed entities, then merge in the fresh ones
+      const refreshSet = new Set(entitiesToRefresh);
+      const retained = this._events.filter(e => !refreshSet.has(e.entityId));
+      const merged = [...retained, ...freshEvents];
+      merged.sort((a, b) => this.getEventStartDate(a) - this.getEventStartDate(b));
+      this._events = this.limitEvents(merged);
+      this.render();
+    } finally {
+      this._fetching = false;
+    }
+  }
+
   async extendEventsForRange(startDate, endDate) {
     if (!this._hass || this._fetching) return;
 
@@ -1074,8 +1112,9 @@ class SkylightCalendarCard extends HTMLElement {
     if (!eventName || !this._hass?.connection) return;
     if (this._haEventSubscription) return; // already subscribed
     this._hass.connection.subscribeEvents((event) => {
-      this._lastFetch = null;
-      this.ensureEventsForCurrentRange({ force: true });
+      // Surgical refresh: only re-fetch the configured calendar entities,
+      // splice results in-place so only changed events flicker/appear/disappear.
+      this.refreshCalendarEntities(this._config.entities);
     }, eventName).then((unsub) => {
       this._haEventSubscription = unsub;
     }).catch((err) => {
